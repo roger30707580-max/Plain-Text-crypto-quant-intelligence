@@ -24,18 +24,68 @@ with st.sidebar:
     st.info("按右上角 Rerun 可更新。公開 API 若受所在地網路限制，畫面會顯示錯誤，不會改用假資料。")
 
 try:
-    t=ticker(); candles=klines(interval=interval); trades=aggregate_trades(); book=order_book(limit=topn); deriv=derivatives()
-    features=feature_snapshot(candles,trades,book,deriv); signal=build_signal(features)
-    now=datetime.now(timezone.utc).isoformat(); save_snapshot(now,float(t["lastPrice"]),signal,features)
+t = ticker()
+candles = klines(interval=interval)
+trades = aggregate_trades()
+book = order_book(limit=topn)
 except DataSourceError as e:
-    st.error(f"真實資料來源目前無法存取：{e}")
-    st.stop()
+st.error(f"Binance Spot 真實資料目前無法存取：{e}")
+st.stop()
+ 
+derivatives_available = True
+derivatives_error = None
+ 
+try:
+deriv = derivatives()
+except DataSourceError as e:
+derivatives_available = False
+derivatives_error = str(e)
+ 
+# 僅供特徵引擎維持中性，不顯示為真實市場資料
+deriv = {
+"open_interest": 0.0,
+"funding_rate": 0.0,
+"mark_price": 0.0,
+"long_short_ratio": 1.0,
+}
+ 
+features = feature_snapshot(candles, trades, book, deriv)
+signal = build_signal(features)
+ 
+now = datetime.now(timezone.utc).isoformat()
+save_snapshot(
+now,
+float(t["lastPrice"]),
+signal,
+features,
+)
+ 
+if not derivatives_available:
+st.warning(
+"Binance Futures API 在目前雲端伺服器區域受到限制。"
+"Open Interest、Funding 與 Long/Short Ratio 暫時不納入訊號。"
+"Spot、K 線、CVD 與 Order Book 仍使用真實資料。"
+)
 
 cols=st.columns(6)
 cols[0].metric("BTCUSDT",f"${float(t['lastPrice']):,.2f}",f"{float(t['priceChangePercent']):.2f}%")
-cols[1].metric("Open Interest",f"{deriv['open_interest']:,.0f} BTC")
-cols[2].metric("Funding",f"{deriv['funding_rate']*100:.4f}%")
-cols[3].metric("Long/Short",f"{deriv['long_short_ratio']:.3f}")
+if derivatives_available:
+cols[1].metric(
+"Open Interest",
+f"{deriv['open_interest']:,.0f} BTC",
+)
+cols[2].metric(
+"Funding",
+f"{deriv['funding_rate'] * 100:.4f}%",
+)
+cols[3].metric(
+"Long/Short",
+f"{deriv['long_short_ratio']:.3f}",
+)
+else:
+cols[1].metric("Open Interest", "N/A")
+cols[2].metric("Funding", "N/A")
+cols[3].metric("Long/Short", "N/A")
 cols[4].metric("Book Imbalance",f"{book['imbalance']:+.3f}")
 cols[5].metric("Signal",signal['bias'],f"{signal['score']}/100")
 
@@ -74,6 +124,9 @@ with hcol:
         st.dataframe(hdf.tail(10),use_container_width=True,hide_index=True)
     st.subheader("資料健康")
     st.success("Binance Spot: OK")
-    st.success("Binance Futures: OK")
+    if derivatives_available:
+st.success("Binance Futures: OK")
+else:
+st.error("Binance Futures: HTTP 451 regional restriction")
     st.success("SQLite: OK")
     st.caption(f"最後更新：{now}")
